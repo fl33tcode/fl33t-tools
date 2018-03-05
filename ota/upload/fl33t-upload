@@ -1,0 +1,210 @@
+#!/usr/bin/env python
+from optparse import OptionParser
+import sys
+import os
+import re
+import json
+import hashlib
+
+try:
+    import urllib2
+    urlopen = urllib2.urlopen
+    def Request(url, data=None, headers={}):
+        return urllib2.Request(url, data, headers)
+    import urllib
+    urlencode = urllib.urlencode
+    from httplib import HTTPConnection, HTTPSConnection
+except ImportError:
+    import urllib.request
+    urlopen = urllib.request.urlopen
+    Request = urllib.request.Request
+    import urllib.parse
+    urlencode = urllib.parse.urlencode
+    from http.client import HTTPConnection, HTTPSConnection
+
+if bytes != str:
+    to_bytes = lambda s: bytes(s, 'utf-8')
+else:
+    to_bytes = bytes
+
+def md5(fn):
+    md5 = hashlib.md5()
+    with open(fn, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            md5.update(chunk)
+    return md5.hexdigest()
+
+API_BASE = "https://api.fl33t.com"
+
+class Upload:
+    def __init__(self):
+        self.parsed_args = self.parse_args()
+
+    def error(self, msg, print_usage=False):
+        sys.stderr.write("Error: %s\n\n" % msg)
+        if print_usage:
+            self.parser.print_help()
+        sys.exit(1)
+
+    def warn(self, msg):
+        sys.stderr.write("Warning: %s\n" % msg)
+
+    def parse_args(self):
+        usage = "%prog [options] version firmware_file"
+        # TODO: add a brief about what the script does
+        self.parser = OptionParser(usage=usage, add_help_option=False)
+        self.parser.add_option("-h", "--help",
+                          action="help",
+                          help="Show this help message and exit")
+        # TODO: support the verbose option
+        self.parser.add_option("-v", "--verbose",
+                          action="store_true", dest="verbose", default=False,
+                          help="Print out all the messy details to stderr")
+        self.parser.add_option("--team-id", dest="team_id",
+            help="Your fl33t team ID. Defaults to the $fl33t_TEAM_ID environment variable.")
+        self.parser.add_option("--session-token", dest="session_token",
+            help="Your fl33t session token. Defaults to the $fl33t_SESSION_TOKEN environment variable. The session must include the upload capability.")
+        self.parser.add_option("--train-id", dest="train_id",
+            help="The ID of the fl33t build train to which this build belongs.")
+        self.parser.add_option("--train-name", dest="train_name",
+            help="The name of the fl33t build train to which this build belongs. If more than one train has this name, the upload will be aborted.")
+        self.parser.add_option("--create-train", dest="create_train", action="store_true", default=False,
+            help="Create the build train if it doesn't exist. Requires --train-name.")
+        return self.parser.parse_args()
+
+    def validate_args(self):
+        options, args = self.parsed_args
+        self.verbose = options.verbose
+
+        self.session_token = options.session_token or os.environ.get('$fl33t_SESSION_TOKEN')
+        if not self.session_token:
+            self.error("A session token is required. Specify --session-token or set $fl33t_SESSION_TOKEN.")
+
+        self.team_id = options.team_id or os.environ.get('$fl33t_TEAM_ID')
+        if not self.team_id:
+            self.error("A team ID is required. Specify --team-id or set $fl33t_TEAM_ID.")
+
+        self.train_id = options.train_id
+        self.train_name = options.train_name
+        self.create_train = options.create_train
+
+        if self.train_id:
+            if self.train_name:
+                self.warn("--train-name will be ignored since --train-id is present")
+                self.train_name = None
+            if self.create_train:
+                self.warn("--create-train will be ignored since --train-id is present")
+                self.create_train = False
+        elif not self.train_name:
+                self.error("No train ID or name specified. Use --train-id or --train-name.")
+
+        if len(args) != 2:
+            self.error("A version and a firmware file are required", print_usage=True)
+
+        self.version, self.filename = args
+
+        if not re.match("^\d+(?:\.\d+)*$", self.version):
+            self.error("Invalid version string. A version must be one or more numbers, separated by dots.")
+
+        if not os.path.isfile(self.filename):
+            self.error("%s is not a file." % self.filename)
+
+    def auth_headers(self):
+        return {'Authorization' : 'Bearer ' + self.session_token}
+
+    def upload_file(self, url, filename):
+        headers = {
+            'Content-Length' : os.path.getsize(filename),
+        }
+        with open(filename) as build_file:
+            scheme, url = url.split('//', 1) # strip off the scheme
+            host, url = url.split('/', 1)
+            url = '/' + url # add back the leading /
+            if 'https' in scheme.lower():
+                conn = HTTPSConnection(host)
+            else:
+                conn = HTTPConnection(host)
+            conn.request('PUT', url, build_file, headers)
+            resp = conn.getresponse()
+            if resp.status != 200:
+                self.error("Error uploading file: %d" % resp.status)
+
+    def do_request(self, url, data, method, *args, **kwargs):
+        url = API_BASE+(url % ((self.team_id,) + args))
+        if kwargs:
+            url += '?' + urlencode(kwargs)
+        headers = self.auth_headers()
+        if data:
+            headers['Content-Type'] = 'application/json'
+        req = Request(url, data=data, headers=headers)
+        req.get_method = lambda: method
+        resp = urlopen(req)
+        try:
+            return json.loads(resp.read().decode('utf-8'))
+        except Exception:
+            pass
+
+    def do_get(self, url, *args, **kwargs):
+        return self.do_request(url, None, 'GET', *args, **kwargs)
+
+    def do_post(self, url, *args, **kwargs):
+        data = kwargs.pop('data', None)
+        if data:
+            data = to_bytes(json.dumps(data))
+        return self.do_request(url, data, 'POST', *args, **kwargs)
+
+    def get_train(self):
+        if self.train_id:
+            train = self.do_get("/team/%s/train/%s", self.train_id)
+            if not train:
+                self.error("Unable to fetch build train %s" % self.train_id)
+        else:
+            trains = self.do_get("/team/%s/trains", name=self.train_name)
+            if not trains:
+                self.error("Unable to fetch trains named \"%s\"" % self.train_name)
+            trains = trains['trains']
+            if len(trains) > 1:
+                self.error("Found more than one train named \"%s\"" % self.train_name)
+            elif len(trains) == 1:
+                train = trains[0]
+            else:
+                if self.create_train:
+                    resp = self.do_post("/team/%s/train", data={"train" : {"name" : self.train_name}})
+                    if not resp:
+                        self.error("Unable to create new train \"%s\"" % self.train_name)
+                    train = resp['train']
+                else:
+                    self.error("Train \"%s\" not found and --create-train was not specified" % self.train_name)
+
+            self.train_id = train['train_id']
+
+    def create_build(self):
+        build = {
+            'train_id' : self.train_id,
+            'version' : self.version,
+            'md5sum' : md5(self.filename),
+        }
+        resp = self.do_post("/team/%s/train/%s/build", self.train_id, data={'build' : build})
+        if not resp or 'build' not in resp:
+            self.error("Unable to create build %s" % self.version)
+        self.build = resp['build']
+        sys.stdout.write(json.dumps(resp))
+
+    def upload_build(self):
+        upload_url = self.build.get('upload_url')
+        if not upload_url:
+            self.error("Missing upload_url for build %s" % self.build['build_id'])
+        self.upload_file(upload_url, self.filename)
+
+    def run(self):
+        self.validate_args()
+        self.get_train()
+        self.create_build()
+        self.upload_build()
+
+if __name__ == '__main__':
+    try:
+        u = Upload()
+        u.run()
+    except Exception as e:
+        u.error(str(e))

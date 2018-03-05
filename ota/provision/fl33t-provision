@@ -1,0 +1,195 @@
+#!/usr/bin/env python
+from optparse import OptionParser
+import sys
+import os
+import json
+import csv
+
+try:
+    import urllib2
+    urlopen = urllib2.urlopen
+    def Request(url, data=None, headers={}):
+        return urllib2.Request(url, data, headers)
+    import urllib
+    urlencode = urllib.urlencode
+except ImportError:
+    import urllib.request
+    urlopen = urllib.request.urlopen
+    Request = urllib.request.Request
+    import urllib.parse
+    urlencode = urllib.parse.urlencode
+
+if bytes != str:
+    to_bytes = lambda s: bytes(s, 'utf-8')
+else:
+    to_bytes = bytes
+
+API_BASE = "https://api.fl33t.com"
+
+class Provision:
+    def __init__(self):
+        self.parsed_args = self.parse_args()
+
+    def error(self, msg, print_usage=False):
+        sys.stderr.write("Error: %s\n\n" % msg)
+        if print_usage:
+            self.parser.print_help()
+        sys.exit(1)
+
+    def warn(self, msg):
+        sys.stderr.write("Warning: %s\n" % msg)
+
+    def parse_args(self):
+        usage = "%prog [options]"
+        # TODO: add a brief about what the script does
+        self.parser = OptionParser(usage=usage, add_help_option=False)
+        self.parser.add_option("-h", "--help",
+                          action="help",
+                          help="Show this help message and exit")
+        # TODO: support the verbose option
+        self.parser.add_option("-v", "--verbose",
+                          action="store_true", dest="verbose", default=False,
+                          help="Print out all the messy details to stderr")
+        self.parser.add_option("--team-id", dest="team_id",
+            help="Your fl33t team ID. Defaults to the $fl33t_TEAM_ID environment variable.")
+        self.parser.add_option("--session-token", dest="session_token",
+            help="Your fl33t session token. Defaults to the $fl33t_SESSION_TOKEN environment variable. The session must include the provisioning capability.")
+        self.parser.add_option("--input-file", dest="input_file",
+            help="A file containing a list of devices as JSON or CSV. If JSON, the top-level object should have a 'devices' property, which is an array of device objects. See https://www.fl33t.com/docs/rest#devices for documentation on supported properties for each device. Required properties are device_id and fleet_id.")
+        self.parser.add_option("--input-format", dest="input_format", default="JSON",
+            help="The format of the input file. Supported formats are CSV and JSON. Default is JSON.")
+        self.parser.add_option("--output-format", dest="output_format", default="JSON",
+            help="The format to use when printing the newly provisioned devices to stdout. Supported formats are CSV and JSON. Default is JSON.")
+        self.parser.add_option("--device-id", dest="device_id",
+            help="When provisioning a single device, the unique identifier of that device.")
+        self.parser.add_option("--fleet-id", dest="fleet_id",
+            help="When provisioning a single device, the fl33t ID of the fleet to which that device should belong.")
+        self.parser.add_option("--device-name", dest="device_name",
+            help="When provisioning a single device, the (optional) name of that device.")
+        return self.parser.parse_args()
+
+    def validate_args(self):
+        options, args = self.parsed_args
+        self.verbose = options.verbose
+
+        self.session_token = options.session_token or os.environ.get('$fl33t_SESSION_TOKEN')
+        if not self.session_token:
+            self.error("A session token is required. Specify --session-token or set $fl33t_SESSION_TOKEN.")
+
+        self.team_id = options.team_id or os.environ.get('$fl33t_TEAM_ID')
+        if not self.team_id:
+            self.error("A team ID is required. Specify --team-id or set $fl33t_TEAM_ID.")
+
+        self.input_format = options.input_format.lower()
+        if self.input_format not in {'csv', 'json'}:
+            self.error("Unsupported input format: %s" % options.input_format)
+
+        self.output_format = options.output_format.lower()
+        if self.output_format not in {'csv', 'json'}:
+            self.error("Unsupported output format: %s" % options.output_format)
+
+        self.device_id = options.device_id
+        self.fleet_id = options.fleet_id
+        self.device_name = options.device_name
+        self.input_file = options.input_file
+
+        self.single_device = self.device_id or self.fleet_id or self.device_name
+
+        if self.single_device and self.input_file:
+            self.error("An input file cannot be specified when provisioning a single device.")
+
+        if self.single_device and not (self.device_id and self.fleet_id):
+            self.error("A device ID and a fleet ID are required when provisioning a single device.")
+
+        if not self.single_device and not self.input_file:
+            self.error("An input file is required unless provisioning a single device.")
+
+        if self.input_file and not os.path.isfile(self.input_file):
+            self.error("%s is not a file." % self.input_file)
+
+    def auth_headers(self):
+        return {'Authorization' : 'Bearer ' + self.session_token}
+
+    def do_request(self, url, data, method, *args, **kwargs):
+        url = API_BASE+(url % ((self.team_id,) + args))
+        if kwargs:
+            url += '?' + urlencode(kwargs)
+        headers = self.auth_headers()
+        if data:
+            headers['Content-Type'] = 'application/json'
+        req = Request(url, data=data, headers=headers)
+        req.get_method = lambda: method
+        resp = urlopen(req)
+        try:
+            return json.loads(resp.read().decode('utf-8'))
+        except Exception:
+            pass
+
+    def do_get(self, url, *args, **kwargs):
+        return self.do_request(url, None, 'GET', *args, **kwargs)
+
+    def do_post(self, url, *args, **kwargs):
+        data = kwargs.pop('data', None)
+        if data:
+            data = to_bytes(json.dumps(data))
+        return self.do_request(url, data, 'POST', *args, **kwargs)
+
+    def provision_device(self):
+        device = {
+            'device_id' : self.device_id,
+            'fleet_id' : self.fleet_id,
+            'name' : self.device_name,
+        }
+        resp = self.do_post("/team/%s/device", data={"device" : device})
+        if not resp or 'device' not in resp:
+            self.error("Unable to provision device %s" % self.device_id)
+
+        self.print_output(resp, [resp['device']])
+
+    def read_input(self):
+        with open(self.input_file) as input_file:
+            if self.input_format == 'json':
+                input_data = json.load(input_file)
+                if 'devices' not in input_data:
+                    self.error("Top-level object must have a 'devices' property, which is an array of device objects.")
+                self.devices = input_data['devices']
+            else:
+                reader = csv.DictReader(input_file)
+                self.devices = list(reader)
+
+        for device in self.devices:
+            if not device.get('device_id') or not device.get('fleet_id'):
+                self.error("A device ID and fleet ID are required for each device")
+
+    def provision_devices(self):
+        resp = self.do_post("/team/%s/devices", data={"devices" : self.devices})
+        if not resp or 'devices' not in resp:
+            self.error("Unable to provision devices.")
+
+        self.print_output(resp, resp['devices'])
+
+    def print_output(self, response, devices):
+        if self.output_format == 'json':
+            sys.stdout.write(json.dumps(response))
+            sys.stdout.write('\n')
+        else:
+            writer = csv.writer(sys.stdout)
+            cols = ['device_id', 'fleet_id', 'name', 'session_token']
+            writer.writerow(cols)
+            for device in devices:
+                writer.writerow([device.get(c, '') for c in cols])
+
+    def run(self):
+        self.validate_args()
+        if self.single_device:
+            self.provision_device()
+        else:
+            self.read_input()
+            self.provision_devices()
+
+if __name__ == '__main__':
+    try:
+        p = Provision()
+        p.run()
+    except Exception as e:
+        p.error(str(e))

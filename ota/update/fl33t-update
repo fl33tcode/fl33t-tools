@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+
+PROGRAM=$(basename $0)
+CURL=$(command -v curl)
+API_BASE="https://api.fl33t.com"
+SESSION_TOKEN=
+TEAM_ID=
+DEVICE_ID=
+INSTALLED_BUILD=
+VERBOSE=0
+DOWNLOAD_PATH=
+
+echoerr() {
+    (>&2 echo "$@")
+}
+
+print_usage() {
+    echoerr "Usage: $PROGRAM [options] team_id device_id session_token"
+    echoerr ""
+    echoerr "$PROGRAM checks for software updates for a particular device."
+    echoerr "If an update is available, metadata about the update is printed"
+    echoerr "to stdout as JSON, and $PROGRAM can optionally download the update."
+    echoerr ""
+    echoerr "Options:"
+    echoerr "  -h, --help              Show this help message and exit"
+    echoerr "  -v, --verbose           Print out all the messy details to stderr"
+    echoerr "  --installed-build=BUILD The fl33t ID of the currently installed build on"
+    echoerr "                          this device. This is required to 1) allow the server"
+    echoerr "                          to decide if an update is necessary or not, and"
+    echoerr "                          2) update build rollout reporting."
+    echoerr " --download=PATH          Instruct $PROGRAM to download the software update,"
+    echoerr "                          and save it to PATH, if one is available."
+    echoerr "                          By default, $PROGRAM only checks for an update"
+    echoerr "                          and prints its metadata to stdout, without"
+    echoerr "                          downloading the update."
+}
+
+if [ -z $CURL ]; then
+    echoerr "Error: ${PROGRAM} requires curl"
+    exit 1
+fi
+
+POSITIONAL_ARGS=()
+
+for opt in "$@"
+do
+case $opt in
+    --session-token=*)
+        SESSION_TOKEN="${opt#*=}"
+        shift
+    ;;
+    --download=*)
+        DOWNLOAD_PATH="${opt#*=}"
+        shift
+    ;;
+    --installed-build=*)
+        INSTALLED_BUILD="${opt#*=}"
+        shift
+    ;;
+    -v|--verbose)
+        VERBOSE=1
+        shift
+    ;;
+    -h|--help)
+        print_usage
+        exit 0
+    ;;
+    *)
+        POSITIONAL_ARGS+=("$1")
+        shift
+    ;;
+esac
+done
+
+set -- "${POSITIONAL_ARGS[@]}"
+
+if [ "$#" -ne 3 ]; then
+    echoerr "Error: Incorrect number of arguments"
+    echoerr ""
+    print_usage
+    exit 1
+fi
+
+TEAM_ID="$1"
+DEVICE_ID="$2"
+SESSION_TOKEN="$3"
+CURL_VERBOSE="-s"
+
+if ((VERBOSE)); then
+    echoerr ""
+    echoerr "team_id: ${TEAM_ID}"
+    echoerr "device_id: ${DEVICE_ID}"
+    echoerr "session_token: ${SESSION_TOKEN}"
+    echoerr "download_path: ${DOWNLOAD_PATH}"
+    echoerr ""
+    echoerr "Checking for updates..."
+    CURL_VERBOSE="-v"
+fi
+
+URL="${API_BASE}/team/${TEAM_ID}/device/${DEVICE_ID}/build"
+
+if [ -n "${INSTALLED_BUILD}" ]; then
+    URL="${URL}?installed_build_id=${INSTALLED_BUILD}"
+fi
+
+if [ -n "${DOWNLOAD_PATH}" ] && [ -z "${INSTALLED_BUILD}" ]; then
+    echoerr ""
+    echoerr "WARNING: --download was specified, but no --installed-build"
+    echoerr "This could result in unnecessarily re-downloading a build that is"
+    echoerr "already installed."
+    echoerr ""
+fi
+
+UPDATE=$( (($VERBOSE)) && set -x ; $CURL $CURL_VERBOSE -H "Authorization: Bearer ${SESSION_TOKEN}" ${URL})
+echo "${UPDATE}"
+
+if ((VERBOSE)); then
+    echoerr ""
+    echoerr "Update check complete."
+    echoerr "${UPDATE}"
+fi
+
+if [ -n "${DOWNLOAD_PATH}" ]; then
+    # use sed to parse the download_url out of the json response
+    DOWNLOAD_URL=$(echo $UPDATE | sed -n "s/^.*\"download_url\"\: \"\([^\"]*\)\".*$/\1/p")
+    if [ -n "${DOWNLOAD_URL}" ]; then
+        if ((VERBOSE)); then
+            echoerr ""
+            echoerr "Downloading update"
+            echoerr "  download_url:    ${DOWNLOAD_URL}"
+            echoerr "  download_path:   ${DOWNLOAD_PATH}"
+            echoerr ""
+        fi
+        $( (($VERBOSE)) && set -x ; $CURL $CURL_VERBOSE -o $DOWNLOAD_PATH $DOWNLOAD_URL)
+    else
+        echoerr ""
+        echoerr "Error: No download_url found in update metadata"
+        exit 1
+    fi
+fi
