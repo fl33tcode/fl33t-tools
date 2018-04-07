@@ -161,16 +161,23 @@ class Provision:
             if not device.get('device_id') or not device.get('fleet_id'):
                 self.error("A device ID and fleet ID are required for each device")
 
+    def devices_batches(self):
+        for i in range(0, len(self.devices), 1000):
+            yield self.devices[i:i + 1000]
+
     def provision_devices(self):
-        resp = self.do_post("/team/%s/devices", data={"devices" : self.devices})
-        if not resp or 'devices' not in resp:
-            self.error("Unable to provision devices.")
+        result_devices = []
+        for devices in self.devices_batches():
+            resp = self.do_post("/team/%s/devices", data={"devices" : devices})
+            if not resp or 'devices' not in resp:
+                self.error("Unable to provision devices.")
+            result_devices.extend(resp['devices'])
 
-        self.print_output(resp, resp['devices'])
+        self.print_output(result_devices)
 
-    def print_output(self, response, devices):
+    def print_output(self, devices):
         if self.output_format == 'json':
-            sys.stdout.write(json.dumps(response))
+            sys.stdout.write(json.dumps({'devices':devices}))
             sys.stdout.write('\n')
         else:
             writer = csv.writer(sys.stdout)
