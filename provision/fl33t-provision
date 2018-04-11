@@ -144,7 +144,7 @@ class Provision:
         if not resp or 'device' not in resp:
             self.error("Unable to provision device %s" % self.device_id)
 
-        self.print_output(resp, [resp['device']])
+        self.print_output(resp)
 
     def read_input(self):
         with open(self.input_file) as input_file:
@@ -177,12 +177,16 @@ class Provision:
 
     def print_output(self, devices):
         if self.output_format == 'json':
-            sys.stdout.write(json.dumps({'devices':devices}))
+            if isinstance(devices, list):
+                devices = {'devices':devices}
+            sys.stdout.write(json.dumps(devices))
             sys.stdout.write('\n')
         else:
             writer = csv.writer(sys.stdout)
             cols = ['device_id', 'fleet_id', 'name', 'session_token']
             writer.writerow(cols)
+            if not isinstance(devices, list):
+                devices = [devices]
             for device in devices:
                 writer.writerow([device.get(c, '') for c in cols])
 
