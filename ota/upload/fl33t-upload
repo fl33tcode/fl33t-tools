@@ -116,7 +116,7 @@ class Upload:
         headers = {
             'Content-Length' : os.path.getsize(filename),
         }
-        with open(filename) as build_file:
+        with open(filename, "rb") as build_file:
             scheme, url = url.split('//', 1) # strip off the scheme
             host, url = url.split('/', 1)
             url = '/' + url # add back the leading /
@@ -188,7 +188,8 @@ class Upload:
         if not resp or 'build' not in resp:
             self.error("Unable to create build %s" % self.version)
         self.build = resp['build']
-        sys.stdout.write(json.dumps(resp))
+        sys.stdout.write(json.dumps(resp, indent=4))
+        sys.stdout.write("\n")
 
     def upload_build(self):
         upload_url = self.build.get('upload_url')
