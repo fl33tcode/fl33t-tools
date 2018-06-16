@@ -113,8 +113,10 @@ class Upload:
         return {'Authorization' : 'Bearer ' + self.session_token}
 
     def upload_file(self, url, filename):
+        basename = os.path.basename(filename)
         headers = {
             'Content-Length' : os.path.getsize(filename),
+            'Content-Disposition' : 'attachment; filename="%s"' % basename,
         }
         with open(filename, "rb") as build_file:
             scheme, url = url.split('//', 1) # strip off the scheme
