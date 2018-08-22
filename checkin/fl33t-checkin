@@ -2,13 +2,14 @@
 
 PROGRAM=$(basename $0)
 CURL=$(command -v curl)
+SED=$(command -v sed)
 API_BASE="https://api.fl33t.com"
 SESSION_TOKEN=
 TEAM_ID=
 DEVICE_ID=
-INSTALLED_BUILD=
+BUILD_ID=
 VERBOSE=0
-DOWNLOAD_PATH=
+SAVE_BUILD_PATH=
 
 echoerr() {
     (>&2 echo "$@")
@@ -24,19 +25,24 @@ print_usage() {
     echoerr "Options:"
     echoerr "  -h, --help              Show this help message and exit"
     echoerr "  -v, --verbose           Print out all the messy details to stderr"
-    echoerr "  --installed-build=BUILD The fl33t ID of the currently installed build on"
+    echoerr "  --build-id=BUILD_ID     The fl33t ID of the currently installed build on"
     echoerr "                          this device. This is required to 1) allow the server"
     echoerr "                          to decide if an update is necessary or not, and"
     echoerr "                          2) update build rollout reporting."
-    echoerr " --download=PATH          Instruct $PROGRAM to download the software update,"
+    echoerr "  --save-build=PATH       Instruct $PROGRAM to download the latest build,"
     echoerr "                          and save it to PATH, if one is available."
     echoerr "                          By default, $PROGRAM only checks for an update"
     echoerr "                          and prints its metadata to stdout, without"
     echoerr "                          downloading the update."
 }
 
-if [ -z $CURL ]; then
+if [ -z "${CURL}" ]; then
     echoerr "Error: ${PROGRAM} requires curl"
+    exit 1
+fi
+
+if [ -z "${SED}" ]; then
+    echoerr "Error: ${PROGRAM} requires sed"
     exit 1
 fi
 
@@ -45,16 +51,12 @@ POSITIONAL_ARGS=()
 for opt in "$@"
 do
 case $opt in
-    --session-token=*)
-        SESSION_TOKEN="${opt#*=}"
+    --save-build=*)
+        SAVE_BUILD_PATH="${opt#*=}"
         shift
     ;;
-    --download=*)
-        DOWNLOAD_PATH="${opt#*=}"
-        shift
-    ;;
-    --installed-build=*)
-        INSTALLED_BUILD="${opt#*=}"
+    --build-id=*)
+        BUILD_ID="${opt#*=}"
         shift
     ;;
     -v|--verbose)
@@ -91,28 +93,38 @@ if ((VERBOSE)); then
     echoerr "team_id: ${TEAM_ID}"
     echoerr "device_id: ${DEVICE_ID}"
     echoerr "session_token: ${SESSION_TOKEN}"
-    echoerr "download_path: ${DOWNLOAD_PATH}"
+    echoerr "save_build_path: ${SAVE_BUILD_PATH}"
     echoerr ""
     echoerr "Checking for updates..."
     CURL_VERBOSE="-v"
 fi
 
-URL="${API_BASE}/team/${TEAM_ID}/device/${DEVICE_ID}/build"
+URL="${API_BASE}/team/${TEAM_ID}/device/${DEVICE_ID}/checkin"
 
-if [ -n "${INSTALLED_BUILD}" ]; then
-    URL="${URL}?installed_build_id=${INSTALLED_BUILD}"
+if [ -n "${BUILD_ID}" ]; then
+    DATA="{\"checkin\":{\"build_id\":\"${BUILD_ID}\"}}"
+else
+    DATA="{\"checkin\":{}}"
 fi
 
-if [ -n "${DOWNLOAD_PATH}" ] && [ -z "${INSTALLED_BUILD}" ]; then
+if [ -n "${SAVE_BUILD_PATH}" ] && [ -z "${BUILD_ID}" ]; then
     echoerr ""
-    echoerr "WARNING: --download was specified, but no --installed-build"
+    echoerr "WARNING: --save-build was specified, but no --build-id"
     echoerr "This could result in unnecessarily re-downloading a build that is"
     echoerr "already installed."
     echoerr ""
 fi
 
-UPDATE=$( (($VERBOSE)) && set -x ; $CURL $CURL_VERBOSE -H "Authorization: Bearer ${SESSION_TOKEN}" ${URL})
-echo "${UPDATE}"
+UPDATE=$( \
+    (($VERBOSE)) && set -x ; \
+    $CURL $CURL_VERBOSE -d ${DATA} \
+    -H "Authorization: Bearer ${SESSION_TOKEN}" \
+    -H "Content-Type: application/json" \
+    ${URL})
+
+if [ ! -z "${UPDATE}" ]; then
+    echo "${UPDATE}"
+fi
 
 if ((VERBOSE)); then
     echoerr ""
@@ -120,18 +132,18 @@ if ((VERBOSE)); then
     echoerr "${UPDATE}"
 fi
 
-if [ -n "${DOWNLOAD_PATH}" ]; then
+if [ -n "${SAVE_BUILD_PATH}" ] && [ ! -z "${UPDATE}" ]; then
     # use sed to parse the download_url out of the json response
-    DOWNLOAD_URL=$(echo $UPDATE | sed -n "s/^.*\"download_url\"\: \"\([^\"]*\)\".*$/\1/p")
+    DOWNLOAD_URL=$(echo $UPDATE | $SED -n "s/^.*\"download_url\"\: \"\([^\"]*\)\".*$/\1/p")
     if [ -n "${DOWNLOAD_URL}" ]; then
         if ((VERBOSE)); then
             echoerr ""
             echoerr "Downloading update"
             echoerr "  download_url:    ${DOWNLOAD_URL}"
-            echoerr "  download_path:   ${DOWNLOAD_PATH}"
+            echoerr "  download_path:   ${SAVE_BUILD_PATH}"
             echoerr ""
         fi
-        $( (($VERBOSE)) && set -x ; $CURL $CURL_VERBOSE -o $DOWNLOAD_PATH $DOWNLOAD_URL)
+        $( (($VERBOSE)) && set -x ; $CURL $CURL_VERBOSE -o $SAVE_BUILD_PATH $DOWNLOAD_URL)
     else
         echoerr ""
         echoerr "Error: No download_url found in update metadata"
