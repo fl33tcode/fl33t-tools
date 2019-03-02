@@ -1,11 +1,12 @@
 {
   "name": "@fl33t/browser-client",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "private": false,
   "description": "Client-side JavaScript library for fl33t",
-  "main": "index.js",
+  "main": "build/index.js",
   "scripts": {
-    "test": "jest"
+    "test": "jest",
+    "build": "babel index.js -d build"
   },
   "repository": {
     "type": "git",
@@ -22,6 +23,7 @@
   },
   "homepage": "https://github.com/fl33tcode/fl33t-tools#readme",
   "devDependencies": {
+    "babel-cli": "^6.26.0",
     "babel-core": "^6.26.3",
     "babel-jest": "^23.6.0",
     "babel-preset-env": "^1.7.0",
