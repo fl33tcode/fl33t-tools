@@ -171,6 +171,7 @@ class UpdatingScreen extends Component {
           { type: "completed", title: "Completed!", progress: () => 0 }
       ];
       this.state = {
+          buildId: "",
           currentPhase: 0,
           downloadProgress: 0,
           filePath: "",
@@ -178,11 +179,26 @@ class UpdatingScreen extends Component {
       };
 
   }
+  setPhase(type) {
+      const idx = this.phases.findIndex((p) => p.type === type);
+      this.setState({currentPhase: idx});
+  }
   checkForUpdate() {
-      // TODO
+      AsyncStorage.getItem("buildId").then((buildId) => {
+          let fl33tclient = new fl33t(config.sessionToken, config.teamId);
+          fl33tclient.checkin(config.deviceId, buildId).then((resp) => {
+              if (resp && resp.build) {
+                  this.installBuild(resp.build);
+              }
+              else {
+                  this.setPhase("completed");
+              }
+          });
+      });
   }
   installBuild(build) {
-    this.setState({currentPhase: 1});
+    this.setPhase("downloading");
+    this.setState({buildId: build.build_id});
     FB.fetch("GET", build.download_url).then(file => {
       console.log("file saved to", file.path());
       const device = this.props.navigation.getParam('device');
@@ -204,27 +220,29 @@ class UpdatingScreen extends Component {
       this.setState({uploadProgress: percent/100.0});
     });
     DFUEmitter.addListener("DFUStateChanged", ({ state }) => {
+      const phase = this.phases[this.state.currentPhase];
       console.log("DFU state:", state);
       if (state === "CONNECTING") {
-          this.setState({currentPhase: 2});
+          this.setPhase("connecting");
       }
-      else if (this.state.currentPhase === 2 && state === "DFU_PROCESS_STARTING") {
-          this.setState({currentPhase: 3});
+      else if (phase.type === "connecting" && state === "DFU_PROCESS_STARTING") {
+          this.setPhase("begin_dfu");
       }
       else if (state === "ENABLING_DFU_MODE") {
-          this.setState({currentPhase: 4});
+          this.setPhase("enabling_dfu");
       }
-      else if (this.state.currentPhase === 4 && state === "DFU_PROCESS_STARTING") {
-          this.setState({currentPhase: 5});
+      else if (phase.type === "enabling_dfu" && state === "DFU_PROCESS_STARTING") {
+          this.setPhase("starting_dfu");
       }
       else if (state === "DFU_STATE_UPLOADING") {
-          this.setState({currentPhase: 6});
+          this.setPhase("uploading");
       }
       else if (state === "DEVICE_DISCONNECTING") {
-          this.setState({currentPhase: 7});
+          this.setPhase("disconnecting");
       }
       else if (state === "DFU_COMPLETED") {
-          this.setState({currentPhase: 8});
+          this.setPhase("completed");
+          AsyncStorage.setItem("buildId", this.state.buildId);
       }
     });
 
