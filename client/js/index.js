@@ -1,26 +1,46 @@
 "use strict";
 let API_BASE = "https://api.fl33t.com";
+if (window.fetch === undefined) {
+    window.fetch = require('node-fetch');
+}
 
-export default class fl33t{
-  constructor(sessionToken,teamId){
-    this.baseURL = API_BASE + '/team/'+teamId;
+export default class fl33t {
+  constructor(sessionToken, teamId){
+    this.baseURL = API_BASE + '/team/' + teamId;
     this.sessionToken = sessionToken;
   }
-  
-  checkin(deviceId,buildId){
-      let url = "/device/"+deviceId+"/checkin";
-      let checkin = {'checkin':{'build_id':''}};
-      if(buildId !== undefined){
+
+  checkin(deviceId, buildId) {
+      let url = "/device/" + deviceId + "/checkin";
+      let checkin = {'checkin':{}};
+      if (buildId !== undefined) {
         checkin.checkin.build_id = buildId;
       }
-      return this.post(url,checkin);
+      return this.post(url, checkin);
   }
+
+  getTrains() {
+      let url = "/trains";
+      return this.get(url);
+  }
+
+  getBuilds(trainId, options) {
+      if (!options) {
+          options = {};
+      }
+      let url = "/builds?train_id=" + trainId;
+      if (options.limit) {
+          url += '&limit=' + options.limit;
+      }
+      return this.get(url);
+  }
+
   post(url, data) {
     return fetch(this.baseURL + url, {
       method: "post",
       headers: {
-        "Content-type": "application/json",
-        Authorization: "Bearer " +this.sessionToken
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + this.sessionToken
       },
       body: JSON.stringify(data)
     })
@@ -36,8 +56,8 @@ export default class fl33t{
     return fetch(this.baseURL + url, {
       method: "put",
       headers: {
-        "Content-type": "application/json",
-        Authorization: "Bearer " +this.sessionToken
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + this.sessionToken
       },
       body: JSON.stringify(data)
     })
@@ -51,7 +71,7 @@ export default class fl33t{
 
   get(url) {
     return fetch(this.baseURL + url, {
-      headers: { Authorization: "Bearer " +this.sessionToken }
+      headers: { "Authorization": "Bearer " + this.sessionToken }
     })
       .then(response => {
         return this.handleResponse(response, url);
@@ -64,7 +84,7 @@ export default class fl33t{
   del(url) {
     return fetch(this.baseURL + url, {
       method: "delete",
-      headers: { Authorization: "Bearer " +this.sessionToken }
+      headers: { "Authorization": "Bearer " + this.sessionToken }
     })
       .then(response => {
         return this.handleResponse(response, url);
